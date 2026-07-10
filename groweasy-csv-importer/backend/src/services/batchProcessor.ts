@@ -8,8 +8,8 @@ import {
 } from "../types/crm";
 import { extractBatch } from "./aiExtractor";
 
-const BATCH_SIZE = Number(process.env.AI_BATCH_SIZE || 25);
-const MAX_RETRIES = Number(process.env.AI_MAX_RETRIES || 2);
+const BATCH_SIZE = Math.max(1, Number(process.env.AI_BATCH_SIZE || 25));
+const MAX_RETRIES = Math.max(0, Number(process.env.AI_MAX_RETRIES || 3));
 
 function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -19,27 +19,135 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+function toStringValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function splitList(value: unknown): string[] {
+  const text = toStringValue(value);
+  if (!text) return [];
+  return text
+    .split(/[|,;\/\n]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function normalizeCreatedAt(value: unknown): string {
+  const text = toStringValue(value);
+  if (!text) return "";
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function normalizeEnumValue<T extends string>(value: unknown, allowed: readonly T[], synonyms: Record<string, string>): T | "" {
+  const normalized = toStringValue(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!normalized) return "";
+
+  const directMatch = synonyms[normalized];
+  if (directMatch) return directMatch as T;
+
+  return (allowed.find((option) => option.toLowerCase() === normalized) ?? "") as T | "";
+}
+
+function normalizeStatus(value: unknown): CrmRecord["crm_status"] {
+  const synonyms: Record<string, string> = {
+    good_lead_follow_up: "GOOD_LEAD_FOLLOW_UP",
+    good_lead: "GOOD_LEAD_FOLLOW_UP",
+    follow_up: "GOOD_LEAD_FOLLOW_UP",
+    did_not_connect: "DID_NOT_CONNECT",
+    did_not_connects: "DID_NOT_CONNECT",
+    bad_lead: "BAD_LEAD",
+    sale_done: "SALE_DONE",
+  };
+  return normalizeEnumValue(value, CRM_STATUS_VALUES, synonyms);
+}
+
+function normalizeSource(value: unknown): CrmRecord["data_source"] {
+  const synonyms: Record<string, string> = {
+    leads_on_demand: "leads_on_demand",
+    leads_on_demand_leads: "leads_on_demand",
+    meridian_tower: "meridian_tower",
+    meridian: "meridian_tower",
+    eden_park: "eden_park",
+    eden: "eden_park",
+    varah_swamy: "varah_swamy",
+    varah: "varah_swamy",
+    sarjapur_plots: "sarjapur_plots",
+    sarjapur: "sarjapur_plots",
+  };
+  return normalizeEnumValue(value, DATA_SOURCE_VALUES, synonyms);
+}
+
+function normalizePhone(value: unknown): { countryCode: string; mobile: string } {
+  const candidates = splitList(value);
+  const first = candidates[0] ?? "";
+  if (!first) return { countryCode: "", mobile: "" };
+
+  const digitsOnly = first.replace(/\D/g, "");
+  if (!digitsOnly) return { countryCode: "", mobile: "" };
+
+  const explicitCountryCode = first.match(/(\+\d{1,3})/);
+  if (explicitCountryCode) {
+    const prefix = explicitCountryCode[1].replace(/\D/g, "");
+    const remainder = digitsOnly.slice(prefix.length);
+    if (remainder.length >= 7) {
+      return { countryCode: `+${prefix}`, mobile: remainder.replace(/^0+/, "") };
+    }
+  }
+
+  if (digitsOnly.length > 10) {
+    const potentialCountryCode = digitsOnly.slice(0, digitsOnly.length - 10);
+    const remainder = digitsOnly.slice(digitsOnly.length - 10);
+    if (potentialCountryCode.length <= 3 && remainder.length === 10) {
+      return { countryCode: `+${potentialCountryCode}`, mobile: remainder.replace(/^0+/, "") };
+    }
+  }
+
+  return { countryCode: "", mobile: digitsOnly.slice(-10).replace(/^0+/, "") };
+}
+
+function appendNote(existingNote: string, ...parts: string[]): string {
+  return [existingNote, ...parts].filter(Boolean).join(" | ");
+}
+
 /** Defense-in-depth: even if the model drifts, enforce the allowed enums server-side. */
-function sanitizeRecord(raw: any): CrmRecord {
-  const status = CRM_STATUS_VALUES.includes(raw.crm_status) ? raw.crm_status : "";
-  const source = DATA_SOURCE_VALUES.includes(raw.data_source) ? raw.data_source : "";
+export function sanitizeRecord(raw: Record<string, unknown>): CrmRecord {
+  const emailCandidates = splitList(raw.email);
+  const phoneCandidates = splitList(raw.mobile_without_country_code);
+  const primaryEmail = emailCandidates[0] ?? "";
+  const extraEmails = emailCandidates.slice(1);
+  const primaryPhone = phoneCandidates[0] ?? "";
+  const extraPhones = phoneCandidates.slice(1);
+  const { countryCode, mobile } = normalizePhone(primaryPhone);
+
+  const noteParts: string[] = [];
+  if (extraEmails.length > 0) noteParts.push(`Additional emails: ${extraEmails.join(", ")}`);
+  if (extraPhones.length > 0) noteParts.push(`Additional phone numbers: ${extraPhones.join(", ")}`);
+  const existingNote = toStringValue(raw.crm_note);
+  if (existingNote) noteParts.push(existingNote);
 
   return {
-    created_at: String(raw.created_at ?? ""),
-    name: String(raw.name ?? ""),
-    email: String(raw.email ?? ""),
-    country_code: String(raw.country_code ?? ""),
-    mobile_without_country_code: String(raw.mobile_without_country_code ?? ""),
-    company: String(raw.company ?? ""),
-    city: String(raw.city ?? ""),
-    state: String(raw.state ?? ""),
-    country: String(raw.country ?? ""),
-    lead_owner: String(raw.lead_owner ?? ""),
-    crm_status: status,
-    crm_note: String(raw.crm_note ?? ""),
-    data_source: source,
-    possession_time: String(raw.possession_time ?? ""),
-    description: String(raw.description ?? ""),
+    created_at: normalizeCreatedAt(raw.created_at),
+    name: toStringValue(raw.name),
+    email: primaryEmail,
+    country_code: countryCode,
+    mobile_without_country_code: mobile,
+    company: toStringValue(raw.company),
+    city: toStringValue(raw.city),
+    state: toStringValue(raw.state),
+    country: toStringValue(raw.country),
+    lead_owner: toStringValue(raw.lead_owner),
+    crm_status: normalizeStatus(raw.crm_status),
+    crm_note: appendNote("", ...noteParts),
+    data_source: normalizeSource(raw.data_source),
+    possession_time: toStringValue(raw.possession_time),
+    description: toStringValue(raw.description),
   };
 }
 
@@ -61,7 +169,7 @@ async function processBatchWithRetry(
       const skipped: SkippedRecord[] = [...(result.skipped || [])];
 
       for (const raw of result.records || []) {
-        const sanitized = sanitizeRecord(raw);
+        const sanitized = sanitizeRecord(raw as Record<string, unknown>);
         if (hasContactInfo(sanitized)) {
           records.push(sanitized);
         } else {
@@ -72,12 +180,12 @@ async function processBatchWithRetry(
     } catch (err) {
       lastError = err;
       if (attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        const delay = 500 * 2 ** attempt + Math.floor(Math.random() * 200);
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
 
-  // All retries exhausted: mark every row in this batch as skipped rather than failing the whole request.
   const reason = `AI extraction failed after ${MAX_RETRIES + 1} attempts: ${
     lastError instanceof Error ? lastError.message : "unknown error"
   }`;
@@ -96,8 +204,6 @@ export async function processRowsWithAi(rows: RawCsvRow[]): Promise<ExtractionRe
   const imported: CrmRecord[] = [];
   const skipped: SkippedRecord[] = [];
 
-  // Batches run sequentially to stay well within provider rate limits;
-  // swap to Promise.all with a concurrency limiter if higher throughput is needed.
   for (let i = 0; i < batches.length; i++) {
     const { records, skipped: batchSkipped } = await processBatchWithRetry(batches[i], i, batches.length);
     imported.push(...records);

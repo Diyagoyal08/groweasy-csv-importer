@@ -16,9 +16,11 @@ export default function Home() {
   const [rows, setRows] = useState<RawCsvRow[]>([]);
   const [result, setResult] = useState<ExtractionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   async function handleFile(file: File) {
     setError(null);
+    setResult(null);
     setFileName(file.name);
     try {
       const parsed = await parseCsvFile(file);
@@ -27,12 +29,14 @@ export default function Home() {
       setStep("preview");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to read this CSV.");
+      setStep("upload");
     }
   }
 
   async function handleConfirm() {
     setStep("processing");
     setError(null);
+    setIsProcessing(true);
     try {
       const extraction = await extractCrmRecords(rows);
       setResult(extraction);
@@ -40,6 +44,8 @@ export default function Home() {
     } catch (err) {
       setStep("preview");
       setError(err instanceof ApiError ? err.message : "AI extraction failed. Please try again.");
+    } finally {
+      setIsProcessing(false);
     }
   }
 
@@ -50,6 +56,7 @@ export default function Home() {
     setRows([]);
     setResult(null);
     setError(null);
+    setIsProcessing(false);
   }
 
   return (
@@ -115,6 +122,11 @@ export default function Home() {
             <p className="text-muted text-sm">
               Processing {rows.length} rows in batches. This can take a moment for larger files.
             </p>
+            {isProcessing && (
+              <div className="w-full max-w-md rounded-full bg-slate-200 h-2 overflow-hidden">
+                <div className="h-2 w-1/2 rounded-full bg-brand animate-pulse" />
+              </div>
+            )}
           </section>
         )}
 

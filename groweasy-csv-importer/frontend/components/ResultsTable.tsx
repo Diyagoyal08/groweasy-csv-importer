@@ -10,7 +10,7 @@ const STATUS_STYLES: Record<string, string> = {
 export function ResultsTable({ result }: { result: ExtractionResult }) {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid gap-4 md:grid-cols-3">
         <SummaryCard label="Total Imported" value={result.totalImported} accent="good" />
         <SummaryCard label="Total Skipped" value={result.totalSkipped} accent="bad" />
         <SummaryCard label="Total Processed" value={result.totalImported + result.totalSkipped} accent="ink" />
@@ -79,7 +79,7 @@ export function ResultsTable({ result }: { result: ExtractionResult }) {
                   {result.skipped.map((s, i) => (
                     <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
                       <td className="px-4 py-2.5 text-bad border-b border-line whitespace-nowrap">{s.reason}</td>
-                      <td className="px-4 py-2.5 text-muted border-b border-line font-mono text-xs max-w-lg truncate">
+                      <td className="px-4 py-2.5 text-muted border-b border-line font-mono text-xs max-w-lg break-all">
                         {JSON.stringify(s.originalRow)}
                       </td>
                     </tr>

@@ -72,7 +72,11 @@ export function FileDropzone({ onFileSelected, error }: Props) {
           type="file"
           accept=".csv,text/csv"
           className="hidden"
-          onChange={(e) => validateAndEmit(e.target.files?.[0])}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            validateAndEmit(file);
+            e.target.value = "";
+          }}
         />
       </div>
       {shownError && (
