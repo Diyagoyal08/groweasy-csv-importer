@@ -105,5 +105,4 @@ Open http://localhost:3000, upload a CSV, preview it, confirm, and check the res
   so one bad batch never fails the whole import.
 
 ## Position applying for
-
-_(fill in: Software Developer Intern / Software Developer Full-Time)_
+ Software Developer Intern
